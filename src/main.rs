@@ -83,6 +83,8 @@ enum Commands {
         /// Frames to take before beginning new run (0 to run forever)
         #[arg(long, default_value = "0")]
         frames_per_run: u32,
+        #[arg(long, help = "Run stop time in milliseconds since Unix epoch")]
+        stop_time: Option<u64>,
         /// Time-of-flight peak (ns)
         #[arg(long, default_value = "10000000.0")]
         tof_peak: f32,
@@ -114,6 +116,19 @@ enum Commands {
         #[arg(short = 'X', long)]
         kafka_config: Option<Vec<KafkaOption>>,
     },
+}
+
+fn validated_stop_time(
+    frames_per_run: u32,
+    stop_time: Option<u64>,
+) -> Result<Option<u64>, clap::Error> {
+    if stop_time.is_some() && frames_per_run > 0 {
+        return Err(clap::Error::raw(
+            clap::error::ErrorKind::ArgumentConflict,
+            "--stop-time requires --frames-per-run to be 0",
+        ));
+    }
+    Ok(stop_time)
 }
 
 #[tokio::main]
@@ -159,6 +174,7 @@ async fn main() {
             messages_per_frame,
             frames_per_second,
             frames_per_run,
+            stop_time,
             tof_peak,
             tof_sigma,
             det_min,
@@ -173,6 +189,8 @@ async fn main() {
             messages_per_frame,
             frames_per_second,
             frames_per_run,
+            stop_time: validated_stop_time(frames_per_run, stop_time)
+                .unwrap_or_else(|error| error.exit()),
             event_message_config: &EventMessageConfig {
                 events_per_message,
                 tof_peak,
@@ -189,5 +207,46 @@ async fn main() {
         } => {
             count(topic, message_interval, kafka_config).await;
         } // Commands::Play {} => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::error::ErrorKind;
+
+    #[test]
+    fn howl_stop_time_uses_single_run_default() {
+        let cli = Cli::try_parse_from([
+            "saluki",
+            "howl",
+            "localhost:9092",
+            "TEST",
+            "--stop-time",
+            "123456",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Howl {
+                frames_per_run,
+                stop_time,
+                ..
+            } => {
+                assert_eq!(frames_per_run, 0);
+                assert_eq!(
+                    validated_stop_time(frames_per_run, stop_time).unwrap(),
+                    Some(123456)
+                );
+            }
+            _ => panic!("expected howl command"),
+        }
+    }
+
+    #[test]
+    fn howl_stop_time_conflicts_with_repeating_runs() {
+        let error = validated_stop_time(10, Some(123456)).unwrap_err();
+
+        assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
     }
 }
