@@ -30,6 +30,7 @@ fn generate_run_start<'a>(
     det_max: i32,
     event_topic: &str,
     job_id: &str,
+    stop_time: Option<u64>,
 ) -> &'a [u8] {
     fbb.reset();
     let args = SpectraDetectorMappingArgs {
@@ -76,7 +77,7 @@ fn generate_run_start<'a>(
 
     let run_start_args = RunStartArgs {
         start_time: start_time as u64,
-        stop_time: 0, // TODO check this - it's optional so not necessarily 0
+        stop_time: stop_time.unwrap_or_default(),
         run_name: Some(fbb.create_string(&run_name)),
         instrument_name: Some(fbb.create_string("saluki-howl")),
         nexus_structure: Some(fbb.create_string(&nexus_structure.to_string())),
@@ -192,6 +193,7 @@ fn produce_messages(
                     conf.event_message_config.det_max,
                     conf.event_topic,
                     current_job_id,
+                    conf.stop_time,
                 ))
                 .timestamp(now_nanos / 1_000_000),
         ) {
@@ -271,6 +273,7 @@ pub struct HowlConfig<'a> {
     pub messages_per_frame: u32,
     pub frames_per_second: u32,
     pub frames_per_run: u32,
+    pub stop_time: Option<u64>,
     pub veto_probability: f64, // 1 = always vetoed, 0 = never vetoed
     pub event_message_config: &'a EventMessageConfig,
     pub kafka_config: Option<Vec<KafkaOption>>,
@@ -338,6 +341,7 @@ pub fn howl(conf: &HowlConfig) {
                     conf.event_message_config.det_max,
                     conf.event_topic,
                     &current_job_id,
+                    conf.stop_time,
                 ))
                 .timestamp(now_nanos / 1_000_000),
         )
@@ -383,5 +387,23 @@ pub fn howl(conf: &HowlConfig) {
                 behind.as_millis()
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use isis_streaming_data_types::flatbuffers_generated::run_start_pl72::root_as_run_start;
+
+    fn serialised_stop_time(stop_time: Option<u64>) -> u64 {
+        let mut fbb = FlatBufferBuilder::new();
+        let data = generate_run_start(&mut fbb, 2, "events", "job", stop_time);
+        root_as_run_start(data).unwrap().stop_time()
+    }
+
+    #[test]
+    fn run_start_uses_configured_stop_time() {
+        assert_eq!(serialised_stop_time(None), 0);
+        assert_eq!(serialised_stop_time(Some(123456)), 123456);
     }
 }
